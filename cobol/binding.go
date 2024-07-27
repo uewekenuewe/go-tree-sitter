@@ -1,7 +1,7 @@
 package cobol
 
 //#include "parser.h"
-//TSLanguage *tree_sitter_COBOL();
+//TSLanguage *tree_sitter_cobol();
 import "C"
 import (
 	"unsafe"
@@ -9,6 +9,6 @@ import (
 )
 
 func GetLanguage() *sitter.Language {
-	ptr := unsafe.Pointer(C.tree_sitter_COBOL())
+	ptr := unsafe.Pointer(C.tree_sitter_cobol())
 	return sitter.NewLanguage(ptr)
 }
