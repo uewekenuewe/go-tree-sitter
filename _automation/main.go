@@ -81,6 +81,7 @@ func root(args []string) error {
 		flagsParse(fs, args[1:])
 
 		s.CheckUpdates(ctx)
+
 	case "update":
 		if len(args) < 2 {
 			return fmt.Errorf("language argument is missing")
@@ -91,11 +92,15 @@ func root(args []string) error {
 		flagsParse(fs, args[2:])
 
 		s.Update(ctx, args[1], *force)
+		s.writeGrammarsFile(ctx)
+
 	case "update-all":
 		fs := flag.NewFlagSet("update-all", flag.ExitOnError)
 		flagsParse(fs, args[1:])
 
-		s.UpdateAll(ctx)
+		s.UpdateAll(ctx, true)
+		s.writeGrammarsFile(ctx)
+
 	default:
 		return fmt.Errorf("unknown sub-command")
 	}
@@ -194,33 +199,20 @@ func (s *UpdateService) Update(ctx context.Context, language string, force bool)
 	}
 
 	s.downloadGrammar(ctx, grammar)
-	s.writeGrammarsFile(ctx)
 }
 
-func (s *UpdateService) UpdateAll(ctx context.Context) {
-	newVersions := s.fetchNewVersions()
-
+func (s *UpdateService) UpdateAll(ctx context.Context, force bool) {
 	wg := sync.WaitGroup{}
-	for i, g := range s.grammars {
-		v := newVersions[i]
-		if v == nil {
-			continue
-		}
-
+	for _, g := range s.grammars {
 		wg.Add(1)
-		g.Reference = v.Reference
-		g.Revision = v.Revision
 
 		go func(g *Grammar) {
 			defer wg.Done()
 
-			s.downloadGrammar(ctx, g)
+			s.Update(ctx, g.Language, force)
 		}(g)
 	}
-
 	wg.Wait()
-
-	s.writeGrammarsFile(ctx)
 }
 
 func (s *UpdateService) downloadGrammar(ctx context.Context, g *Grammar) {
@@ -231,6 +223,8 @@ func (s *UpdateService) downloadGrammar(ctx context.Context, g *Grammar) {
 	s.makeDir(ctx, g.Language)
 
 	switch g.Language {
+	case "dockerfile":
+		s.downloadDockerfile(ctx, g)
 	case "ocaml":
 		s.downloadOcaml(ctx, g)
 	case "typescript":
@@ -308,7 +302,7 @@ func (s *UpdateService) fetchFile(ctx context.Context, url string) []byte {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		logAndExit(logger, "incorrect response status code", "statusCode", resp.StatusCode)
+		logger.Error("incorrect response status code", "statusCode", resp.StatusCode)
 	}
 
 	b, err := io.ReadAll(resp.Body)
@@ -367,22 +361,14 @@ func (s *UpdateService) downloadPhp(ctx context.Context, g *Grammar) {
 	}
 }
 
-// ocaml is special since its folder structure is different from the other ones
-func (s *UpdateService) downloadOcaml(ctx context.Context, g *Grammar) {
+func (s *UpdateService) downloadDockerfile(ctx context.Context, g *Grammar) {
 	fileMapping := map[string]string{
-		"parser.c":   "ocaml/src/parser.c",
-		"scanner.cc": "ocaml/src/scanner.cc",
-		"scanner.h":  "common/scanner.h",
+		"parser.h":  "src/tree_sitter/parser.h",
+		"parser.c":  "src/parser.c",
+		"scanner.c": "src/scanner.c",
 	}
 
 	url := g.ContentURL()
-	s.downloadFile(
-		ctx,
-		fmt.Sprintf("%s/%s/ocaml/src/tree_sitter/parser.h", url, g.Revision),
-		fmt.Sprintf("%s/parser.h", g.Language),
-		nil,
-	)
-
 	for _, f := range g.Files {
 		fp, ok := fileMapping[f]
 		if !ok {
@@ -394,8 +380,39 @@ func (s *UpdateService) downloadOcaml(ctx context.Context, g *Grammar) {
 			fmt.Sprintf("%s/%s/%s", url, g.Revision, fp),
 			fmt.Sprintf("%s/%s", g.Language, f),
 			map[string]string{
-				`<tree_sitter/parser.h>`:   `"parser.h"`,
-				`"../../common/scanner.h"`: `"scanner.h"`,
+				`"tree_sitter/parser.h"`: `"parser.h"`,
+				`<tree_sitter/parser.h>`: `"parser.h"`,
+			},
+		)
+	}
+}
+
+// ocaml is special since its folder structure is different from the other ones
+func (s *UpdateService) downloadOcaml(ctx context.Context, g *Grammar) {
+	fileMapping := map[string]string{
+		"parser.c":  "grammars/ocaml/src/parser.c",
+		"scanner.c": "grammars/ocaml/src/scanner.c",
+		"scanner.h": "include/scanner.h",
+		"alloc.h":   "include/tree_sitter/alloc.h",
+		"parser.h":  "include/tree_sitter/parser.h",
+	}
+
+	url := g.ContentURL()
+	for _, f := range g.Files {
+		fp, ok := fileMapping[f]
+		if !ok {
+			logAndExit(getLogger(ctx), "mapping for file not found", "file", f)
+		}
+
+		s.downloadFile(
+			ctx,
+			fmt.Sprintf("%s/%s/%s", url, g.Revision, fp),
+			fmt.Sprintf("%s/%s", g.Language, f),
+			map[string]string{
+				`"tree_sitter/alloc.h"`:        `"alloc.h"`,
+				`"tree_sitter/parser.h"`:       `"parser.h"`,
+				`<tree_sitter/parser.h>`:       `"parser.h"`,
+				`"../../../include/scanner.h"`: `"scanner.h"`,
 			},
 		)
 	}
@@ -414,6 +431,7 @@ func (s *UpdateService) downloadTypescript(ctx context.Context, g *Grammar) {
 			fmt.Sprintf("%s/%s/common/scanner.h", url, g.Revision),
 			fmt.Sprintf("%s/%s/scanner.h", g.Language, lang),
 			map[string]string{
+				`"tree_sitter/parser.h"`: `"parser.h"`,
 				`<tree_sitter/parser.h>`: `"parser.h"`,
 			},
 		)
@@ -430,6 +448,7 @@ func (s *UpdateService) downloadTypescript(ctx context.Context, g *Grammar) {
 				fmt.Sprintf("%s/%s/%s/src/%s", url, g.Revision, lang, f),
 				fmt.Sprintf("%s/%s/%s", g.Language, lang, f),
 				map[string]string{
+					`"tree_sitter/parser.h"`:   `"parser.h"`,
 					`<tree_sitter/parser.h>`:   `"parser.h"`,
 					`"../../common/scanner.h"`: `"scanner.h"`,
 				},
