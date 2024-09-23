@@ -17,6 +17,14 @@ import (
 	"unsafe"
 )
 
+// Node represents a single node in the syntax tree
+// It tracks its start and end positions in the source code,
+// as well as its relation to other nodes like its parent, siblings and children.
+type Node struct {
+	c C.TSNode
+	t *Tree // keep pointer on tree because node is valid only as long as tree is
+}
+
 // maintain a map of read functions that can be called from C
 var readFuncs = &readFuncsMap{funcs: make(map[int]ReadFunc)}
 
@@ -377,13 +385,6 @@ func (l *Language) FieldName(idx int) string {
 	return C.GoString(C.ts_language_field_name_for_id((*C.TSLanguage)(l.ptr), C.ushort(idx)))
 }
 
-// Node represents a single node in the syntax tree
-// It tracks its start and end positions in the source code,
-// as well as its relation to other nodes like its parent, siblings and children.
-type Node struct {
-	c C.TSNode
-	t *Tree // keep pointer on tree because node is valid only as long as tree is
-}
 
 type Symbol = C.TSSymbol
 
